@@ -1,15 +1,15 @@
-from cleveland.actor import BaseActor, ListeningActor
+from cleveland.actor import BaseActor
 from cleveland.message import Message
 import asyncio
 
 class StringMessage(Message): pass
 
-class PrintActor(ListeningActor):
+class PrintActor(BaseActor):
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.register_message_handler(StringMessage,
-                                      self._string_message_handler)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.register_handler(StringMessage,
+                              self._string_message_handler)
 
 
     @asyncio.coroutine
