@@ -11,7 +11,7 @@ else:
     install_requires = ['asyncio']
 
 setup(name='cleveland',
-      version='0.1.1',
+      version='0.2',
       author='John Biesnecker',
       author_email='jbiesnecker@gmail.com',
       url='https://github.com/biesnecker/cleveland',

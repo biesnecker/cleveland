@@ -1,1 +1,3 @@
 v0.1, 2015/04/02 -- Initial release.
+v0.2, 2015/04/03 -- Simplified model, removed ListeningActor and the concept of
+                    tasks. Actors should only respond to messages.
