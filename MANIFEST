@@ -5,4 +5,6 @@ README.txt
 setup.py
 ./cleveland/__init__.py
 ./cleveland/actor.py
+./cleveland/broadcaster.py
 ./cleveland/message.py
+./cleveland/version.py
