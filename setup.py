@@ -5,13 +5,16 @@ from distutils.core import setup
 def read(filename):
     return open(os.path.join(os.path.dirname(__file__), filename)).read()
 
+# Grab the version information
+exec(open('cleveland/version.py').read())
+
 if sys.version_info >= (3, 4):
     install_requires = []
 else:
     install_requires = ['asyncio']
 
 setup(name='cleveland',
-      version='0.2',
+      version=__version__,
       author='John Biesnecker',
       author_email='jbiesnecker@gmail.com',
       url='https://github.com/biesnecker/cleveland',
