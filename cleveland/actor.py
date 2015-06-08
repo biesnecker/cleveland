@@ -1,7 +1,7 @@
 import asyncio
 import warnings
 
-from .message import StopMessage
+from .message import StopMessage, QueryMessage
 
 
 class HandlerNotFoundError(KeyError): pass
@@ -9,9 +9,10 @@ class HandlerNotFoundError(KeyError): pass
 class AbstractActor(object):
 
     def __init__(self, *args, **kwargs):
-        self._loop = kwargs.get('loop', asyncio.get_event_loop())
+        self._loop = kwargs['loop'] if 'loop' in kwargs \
+            else asyncio.get_event_loop()
         self._is_running = False
-        self._run_complete = asyncio.Future()
+        self._run_complete = asyncio.Future(loop = self._loop)
 
     def start(self):
         self._is_running = True
@@ -55,12 +56,12 @@ class AbstractActor(object):
 
     @asyncio.coroutine
     def ask(self, target, message):
-        result_future = message.result
-        if not result_future:
-            raise TypeError('Messages sent as asks must have a Future as its '
-                            'results attribute.')
+        assert isinstance(message, QueryMessage)
+        if not hasattr('result', message):
+            message.result = asyncio.Future(loop = self._loop)
+          
         yield from self.tell(target, message)
-        return (yield from result_future)
+        return (yield from message.result)
 
 
 class BaseActor(AbstractActor):
@@ -90,13 +91,14 @@ class BaseActor(AbstractActor):
                 if is_query:
                     message.result.set_exception(ex)
                 else:
-                  warnings.warn('Unhandled exception from handler of {0}'.format(type(message)))
+                    warnings.warn('Unhandled exception from handler of '
+                        '{0}'.format(type(message)))
             else:
                 if is_query:
                     message.result.set_result(response)
         except KeyError as ex:
             raise HandlerNotFoundError(type(message)) from ex
-          
+
     @asyncio.coroutine
     def _stop(self):
         yield from self._receive(StopMessage())
@@ -109,4 +111,5 @@ class BaseActor(AbstractActor):
     # in it so the call to _inbox.get() doesn't block. We don't actually have
     # to do anything with it.
     @asyncio.coroutine
-    def _stop_message_handler(self, message): pass
+    def _stop_message_handler(self, message): 
+        pass
