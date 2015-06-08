@@ -4,7 +4,9 @@ import warnings
 from .message import StopMessage, QueryMessage
 
 
-class HandlerNotFoundError(KeyError): pass
+class HandlerNotFoundError(KeyError): 
+  pass
+
 
 class AbstractActor(object):
 
@@ -25,16 +27,17 @@ class AbstractActor(object):
         yield from self._run_complete
         return True
 
-    # Custom startup logic, override in subclasses
-    def _start(self): pass
+    def _start(self): 
+        '''Custom startup logic, override in subclasses'''
 
-    # Custom shutdown logic, override in subclasses
     @asyncio.coroutine
-    def _stop(self): pass
+    def _stop(self):
+        '''Custom shutdown logic, override in subclasses'''
 
-    # The actor's main work loop
     @asyncio.coroutine
     def _run(self):
+        '''The actor's main work loop'''
+      
         while self._is_running:
             yield from self._task()
 
@@ -50,9 +53,8 @@ class AbstractActor(object):
     def tell(self, target, message):
         try:
             yield from target._receive(message)
-        except AttributeError as e:
-            print('Target does not have a _receive method. Is it an actor?')
-            raise
+        except AttributeError as ex:
+            raise TypeError('Target does not have a _receive method. Is it an actor?') from ex 
 
     @asyncio.coroutine
     def ask(self, target, message):
@@ -107,9 +109,10 @@ class BaseActor(AbstractActor):
     def _receive(self, message):
         yield from self._inbox.put(message)
 
-    # The stop message is only to ensure that the queue has at least one item
-    # in it so the call to _inbox.get() doesn't block. We don't actually have
-    # to do anything with it.
     @asyncio.coroutine
     def _stop_message_handler(self, message): 
-        pass
+        '''The stop message is only to ensure that the queue has at least one
+        item in it so the call to _inbox.get() doesn't block. We don't actually
+        have to do anything with it.
+        '''
+
