@@ -1,5 +1,8 @@
-from .message import StopMessage
 import asyncio
+import warnings
+
+from .message import StopMessage
+
 
 class HandlerNotFoundError(KeyError): pass
 
@@ -79,19 +82,21 @@ class BaseActor(AbstractActor):
     def _task(self):
         message = yield from self._inbox.get()
         try:
-
-            response = yield from self._handlers[type(message)](message)
-
-            # If the message is expecting a result, resolve it.
+            handler  = self._handlers[type(message)]
+            is_query = isinstance(message, QueryMessage)
             try:
-                message.result.set_result(response)
-            except AttributeError:
-                pass
-
-        except KeyError as e:
-            raise HandlerNotFoundError(type(message)) from e
-
-
+                response = yield from handler(message)
+            except Exception as ex:
+                if is_query:
+                    message.result.set_exception(ex)
+                else:
+                  warnings.warn('Unhandled exception from handler of {0}'.format(type(message)))
+            else:
+                if is_query:
+                    message.result.set_result(response)
+        except KeyError as ex:
+            raise HandlerNotFoundError(type(message)) from ex
+          
     @asyncio.coroutine
     def _stop(self):
         yield from self._receive(StopMessage())
