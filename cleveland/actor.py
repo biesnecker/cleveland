@@ -59,7 +59,7 @@ class AbstractActor(object):
     @asyncio.coroutine
     def ask(self, target, message):
         assert isinstance(message, QueryMessage)
-        if not hasattr('result', message):
+        if not hasattr(message, 'result'):
             message.result = asyncio.Future(loop = self._loop)
           
         yield from self.tell(target, message)
