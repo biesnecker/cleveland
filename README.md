@@ -2,7 +2,7 @@
 
 Simple asyncio-based actors.
 
-Named after [Carol Cleveland](http://en.wikipedia.org/wiki/Carol_Cleveland), the only significant female performor on Monty
+Named after [Carol Cleveland](http://en.wikipedia.org/wiki/Carol_Cleveland), the only significant female performer on Monty
 Python's Flying Circus.
 
 ### Example Usage
