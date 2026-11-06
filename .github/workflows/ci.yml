@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+  # Called by release.yml so a tag is only published after the full matrix passes.
+  workflow_call:
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  typecheck:
+    name: Type check (mypy --strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      # tests/typing_usage.py uses the public API like a typed downstream
+      # project would, so broken or missing hints fail here.
+      - run: uv run --python 3.14 --with mypy mypy --strict cleveland tests/typing_usage.py
+
+  test:
+    name: Python ${{ matrix.python }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+        # macOS runners are scarce and often queue for a long time, and
+        # cleveland has no platform-specific code, so one job is enough.
+        include:
+          - { os: macos-latest, python: "3.14" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv run --python ${{ matrix.python }} pytest -v
+
+  # Runs the tests against the wheel that will be published, so packaging
+  # mistakes (a missing module or py.typed) fail here rather than for users.
+  wheel:
+    name: Installed wheel / Python ${{ matrix.python }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - run: uv venv --python ${{ matrix.python }}
+      - run: uv pip install dist/*.whl "pytest>=8"
+      # Move the source package aside so only the installed wheel can be
+      # imported.
+      - run: mv cleveland cleveland-src
+      - run: uv run --no-project python -c "import cleveland, pathlib; assert (pathlib.Path(cleveland.__file__).parent / 'py.typed').exists()"
+      - run: uv run --no-project pytest -v -p no:cacheprovider
