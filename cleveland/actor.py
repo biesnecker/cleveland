@@ -1,118 +1,176 @@
 import asyncio
-import warnings
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
-from .message import StopMessage, QueryMessage
+from .message import Message, QueryMessage, StopMessage
+
+logger = logging.getLogger("cleveland")
+
+M = TypeVar("M", bound=Message)
 
 
-class HandlerNotFoundError(KeyError): 
-  pass
+class HandlerNotFoundError(KeyError):
+    """An actor received a message type it has no handler for."""
 
 
-class AbstractActor(object):
+class ActorStoppedError(RuntimeError):
+    """An actor stopped before it could handle a message."""
 
-    def __init__(self, *args, **kwargs):
-        self._loop = kwargs['loop'] if 'loop' in kwargs \
-            else asyncio.get_event_loop()
+
+class AbstractActor:
+    """An actor that repeatedly runs ``_task()`` between ``start()`` and
+    ``stop()``.
+    """
+
+    def __init__(self) -> None:
         self._is_running = False
-        self._run_complete = asyncio.Future(loop = self._loop)
+        self._stopping = asyncio.Event()
+        self._run_task: "asyncio.Task[None] | None" = None
 
-    def start(self):
+    def start(self) -> None:
+        """Start the actor's work loop. Must be called with the event loop
+        running, and only once per actor."""
+        if self._run_task is not None:
+            raise RuntimeError(f"{type(self).__name__} has already been started")
         self._is_running = True
-        self._loop.create_task(self._run())
+        self._start()
+        self._run_task = asyncio.create_task(self._run())
 
-    @asyncio.coroutine
-    def stop(self):
-        self._is_running = False
-        yield from self._stop()
-        yield from self._run_complete
+    async def stop(self) -> bool:
+        """Stop the actor and wait for its work loop to finish.
+
+        Raises any exception that ended the work loop early.
+        """
+        if self._run_task is None:
+            return True
+        if self._is_running:
+            self._is_running = False
+            self._stopping.set()
+            await self._stop()
+        await self._run_task
         return True
 
-    def _start(self): 
-        '''Custom startup logic, override in subclasses'''
+    def _start(self) -> None:
+        """Custom startup logic, override in subclasses."""
 
-    @asyncio.coroutine
-    def _stop(self):
-        '''Custom shutdown logic, override in subclasses'''
+    async def _stop(self) -> None:
+        """Custom shutdown logic, override in subclasses."""
 
-    @asyncio.coroutine
-    def _run(self):
-        '''The actor's main work loop'''
-      
+    async def _run(self) -> None:
+        """The actor's main work loop."""
         while self._is_running:
-            yield from self._task()
+            await self._task()
 
-        # Signal that the loop has finished.
-        self._run_complete.set_result(True)
+    async def _task(self) -> None:
+        raise NotImplementedError("Subclasses of AbstractActor must implement _task()")
 
-    @asyncio.coroutine
-    def _task(self):
-        raise NotImplementedError('Subclasses of AbstractActor must implement '
-                                  '_task()')
+    async def tell(self, target: "AbstractActor", message: Message) -> None:
+        """Put a message in the target actor's inbox."""
+        receive = getattr(target, "_receive", None)
+        if receive is None:
+            raise TypeError("Target does not have a _receive method. Is it an actor?")
+        await receive(message)
 
-    @asyncio.coroutine
-    def tell(self, target, message):
-        try:
-            yield from target._receive(message)
-        except AttributeError as ex:
-            raise TypeError('Target does not have a _receive method. Is it an actor?') from ex 
-
-    @asyncio.coroutine
-    def ask(self, target, message):
-        assert isinstance(message, QueryMessage)
-        if not message.result:
-            message.result = asyncio.Future(loop = self._loop)
-          
-        yield from self.tell(target, message)
-        return (yield from message.result)
+    async def ask(self, target: "AbstractActor", message: QueryMessage) -> Any:
+        """Send a query to the target actor and wait for its handler's result."""
+        if not isinstance(message, QueryMessage):
+            raise TypeError(f"ask() needs a QueryMessage, not {type(message).__name__}")
+        result = message.result
+        if result is None:
+            result = message.result = asyncio.get_running_loop().create_future()
+        await self.tell(target, message)
+        return await result
 
 
 class BaseActor(AbstractActor):
+    """An actor that handles messages from its inbox, one at a time, with the
+    handler registered for each message type."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._max_inbox_size = kwargs.get('max_inbox_size', 0)
-        self._inbox = asyncio.Queue(maxsize=self._max_inbox_size,
-                                    loop=self._loop)
-        self._handlers = {}
+    def __init__(self, *, max_inbox_size: int = 0) -> None:
+        super().__init__()
+        self._max_inbox_size = max_inbox_size
+        self._inbox: asyncio.Queue[Message] = asyncio.Queue(maxsize=max_inbox_size)
+        self._handlers: dict[type[Message], Callable[[Any], Awaitable[object]]] = {}
+        # Set once stop() is called: no new messages are accepted.
+        self._closed = False
+        # Set once the StopMessage is handled: the work loop ends.
+        self._done = False
 
         # Create handler for the 'poison pill' message
         self.register_handler(StopMessage, self._stop_message_handler)
 
-    def register_handler(self, message_cls, func):
+    def register_handler(
+        self, message_cls: type[M], func: Callable[[M], Awaitable[object]]
+    ) -> None:
+        """Handle messages of exactly ``message_cls`` with ``func``. For a
+        ``QueryMessage``, its return value is the result of ``ask()``."""
         self._handlers[message_cls] = func
 
-    @asyncio.coroutine
-    def _task(self):
-        message = yield from self._inbox.get()
+    async def _run(self) -> None:
+        # Unlike AbstractActor, keep going until the StopMessage that stop()
+        # queues is reached, so messages sent before stop() are all handled.
         try:
-            handler  = self._handlers[type(message)]
-            is_query = isinstance(message, QueryMessage)
-            try:
-                response = yield from handler(message)
-            except Exception as ex:
-                if is_query:
-                    message.result.set_exception(ex)
-                else:
-                    warnings.warn('Unhandled exception from handler of '
-                        '{0}'.format(type(message)))
+            while not self._done:
+                await self._task()
+        finally:
+            self._closed = True
+            self._fail_pending_queries()
+
+    async def _task(self) -> None:
+        message = await self._inbox.get()
+        result = message.result if isinstance(message, QueryMessage) else None
+        handler = self._handlers.get(type(message))
+
+        if handler is None:
+            if result is not None:
+                _set_exception(result, HandlerNotFoundError(type(message)))
             else:
-                if is_query:
-                    message.result.set_result(response)
-        except KeyError as ex:
-            raise HandlerNotFoundError(type(message)) from ex
+                logger.error("No handler for %r in %s", message, type(self).__name__)
+            return
 
-    @asyncio.coroutine
-    def _stop(self):
-        yield from self._receive(StopMessage())
+        try:
+            response = await handler(message)
+        except Exception as ex:
+            if result is not None:
+                _set_exception(result, ex)
+            else:
+                logger.exception(
+                    "Unhandled exception from handler of %s in %s",
+                    type(message).__name__,
+                    type(self).__name__,
+                )
+        else:
+            if result is not None and not result.done():
+                result.set_result(response)
 
-    @asyncio.coroutine
-    def _receive(self, message):
-        yield from self._inbox.put(message)
+    async def _stop(self) -> None:
+        self._closed = True
+        if self._run_task is not None and not self._run_task.done():
+            await self._inbox.put(StopMessage())
 
-    @asyncio.coroutine
-    def _stop_message_handler(self, message): 
-        '''The stop message is only to ensure that the queue has at least one
-        item in it so the call to _inbox.get() doesn't block. We don't actually
-        have to do anything with it.
-        '''
+    async def _receive(self, message: Message) -> None:
+        if self._closed:
+            raise ActorStoppedError(f"{type(self).__name__} has stopped")
+        await self._inbox.put(message)
 
+    def _fail_pending_queries(self) -> None:
+        while not self._inbox.empty():
+            message = self._inbox.get_nowait()
+            if isinstance(message, QueryMessage) and message.result is not None:
+                _set_exception(
+                    message.result,
+                    ActorStoppedError(f"{type(self).__name__} stopped before handling {message!r}"),
+                )
+
+    async def _stop_message_handler(self, message: StopMessage) -> None:
+        """The 'poison pill': everything queued before it has been handled,
+        so end the work loop."""
+        self._closed = True
+        self._done = True
+
+
+def _set_exception(future: "asyncio.Future[Any]", ex: BaseException) -> None:
+    # The asker may have given up (been cancelled or timed out) already.
+    if not future.done():
+        future.set_exception(ex)

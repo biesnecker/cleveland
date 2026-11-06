@@ -1,50 +1,44 @@
+import asyncio
+import contextlib
+
 from .actor import AbstractActor
 from .message import Message
-import asyncio
+
 
 class BaseBroadcaster(AbstractActor):
+    """An actor that sends messages to a list of target actors."""
 
-    def __init__(self, targets=list(), *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._targets = targets
+    def __init__(self, targets: list[AbstractActor] | None = None) -> None:
+        super().__init__()
+        self.targets: list[AbstractActor] = [] if targets is None else targets
 
-    @asyncio.coroutine
-    def _task(self):
-        yield from asyncio.sleep(1)
+    async def _task(self) -> None:
+        await self._stopping.wait()
 
-
-    @asyncio.coroutine
-    def broadcast(self, message):
-        for target in self._targets:
-            yield from self.tell(target, message)
-
+    async def broadcast(self, message: Message) -> None:
+        """Tell every target the same message."""
+        for target in self.targets:
+            await self.tell(target, message)
 
 
 class TimedBroadcaster(BaseBroadcaster):
+    """Broadcasts the message returned by ``_message()`` every ``interval``
+    seconds."""
 
-    def __init__(self, interval=1, targets=list(), *args, **kwargs):
-        super().__init__(targets, *args, **kwargs)
+    def __init__(
+        self, interval: float = 1, targets: list[AbstractActor] | None = None
+    ) -> None:
+        super().__init__(targets)
         self._interval = interval
 
-    @asyncio.coroutine
-    def _message(self):
-        raise NotImplementedError('TimedBroadcast subclasses must implement '
-                                  '_message() and return a valid Message '
-                                  'object.')
+    async def _message(self) -> Message:
+        raise NotImplementedError(
+            "TimedBroadcaster subclasses must implement _message() and return "
+            "a valid Message object."
+        )
 
-    @asyncio.coroutine
-    def _task(self):
-        i = self._interval
-        while i > 0.01:
-            wait = min(i, 1)
-            if not self._is_running:
-                break
-            yield from asyncio.sleep(wait)
-            i -= wait
+    async def _task(self) -> None:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._stopping.wait(), self._interval)
         if self._is_running:
-            message = yield from self._message()
-            yield from self.broadcast(message)
-
-
-
-
+            await self.broadcast(await self._message())

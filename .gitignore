@@ -18,4 +18,8 @@ __pycache__/
 .installed.cfg
 *.egg
 pyvenv.cfg
-pip-selfcheck.json
+pip-selfcheck.json.vscode
+.venv/
+.pytest_cache/
+.mypy_cache/
+uv.lock
