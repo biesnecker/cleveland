@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-11-05)
 
 Cleveland 0.2 can't be imported on Python 3.11 and newer, because it used
 `@asyncio.coroutine`. 0.3 rewrites it with `async def`/`await`. It's a
